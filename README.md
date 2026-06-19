@@ -1,4 +1,5 @@
 # HCAGC
+
 The code for HCAGC: Hamiltonian-Inspired Contrastive Learning for Attribute Graph Clustering
 
 
@@ -7,7 +8,9 @@ The code for HCAGC: Hamiltonian-Inspired Contrastive Learning for Attribute Grap
 
 
 
-When you need to run code on the [arxiv](http://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip) dataset, execute the HCAGC (big map) code.
+When you need to run code on the [arxiv](http://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip) or [pokec](https://zenodo.org/records/16895532/files/pokec-regions.zip) dataset, execute the HCAGC (big map) code.
+
+(Renamed the decompressed pokec-regions file to pokec)
 
 You can run the code using the following command:
 
@@ -25,10 +28,11 @@ torchrun --nproc_per_node=num train.py --dataset arxiv
 
 
 
-If you want to run the code on datasets other than the [arxiv](http://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip) dataset, you can use the following command in HCAGC:
+If you want to run the code on datasets other than the [arxiv](http://snap.stanford.edu/ogb/data/nodeproppred/arxiv.zip) or [pokec](https://zenodo.org/records/16895532/files/pokec-regions.zip) dataset, you can use the following command in HCAGC:
 
 ```python
 python train.py --dataset cora
 ```
+
 
 
