@@ -120,6 +120,8 @@ def normalize_dataset_name(dataset_name):
     dataset_name = dataset_name.lower()
     if dataset_name == 'ogbn-arxiv':
         return 'arxiv'
+    if dataset_name in ['pokec-regions', 'pokec']:
+        return 'pokec'
     return dataset_name
 
 
@@ -147,6 +149,11 @@ def _load_saved_adj_matrix(path):
         if adj.size == 1:
             return adj.reshape(()).item()
     return adj
+
+
+def _has_invalid_values(array):
+    # Check whether a dense feature array still contains NaN or Inf.
+    return np.isnan(array).any() or np.isinf(array).any()
 
 
 def _ensure_arxiv_raw_from_local_zip(dataset_dir):
@@ -248,6 +255,107 @@ def _load_ogb_node_dataset_class():
         return module.NodePropPredDataset
 
 
+def _parse_simple_yaml(path):
+    # Parse the simple key/list structure used by GraphLand info.yaml files.
+    data = {}
+    current_key = None
+
+    def _convert_scalar(value):
+        if value == 'true':
+            return True
+        if value == 'false':
+            return False
+        return value
+
+    with open(path, 'r', encoding='utf-8') as f:
+        for raw_line in f:
+            line = raw_line.rstrip()
+            if not line or line.lstrip().startswith('#'):
+                continue
+
+            if line.startswith('- '):
+                if current_key is None:
+                    raise ValueError(f"Invalid list item in yaml file: {path}")
+                data[current_key].append(_convert_scalar(line[2:].strip()))
+                continue
+
+            if ':' not in line:
+                continue
+
+            key, value = line.split(':', 1)
+            key = key.strip()
+            value = value.strip()
+            if value == '':
+                data[key] = []
+                current_key = key
+            else:
+                data[key] = _convert_scalar(value)
+                current_key = None
+
+    return data
+
+
+def _impute_graphland_features(features_df, info):
+    # Fill GraphLand numerical NaNs before converting features to numpy arrays.
+    df = features_df.copy()
+    numeric_columns = []
+    numeric_columns.extend(info.get('numerical_features_names', []))
+    numeric_columns.extend(info.get('fraction_features_names', []))
+    numeric_columns = [col for col in dict.fromkeys(numeric_columns) if col in df.columns]
+
+    for col in numeric_columns:
+        series = pd.to_numeric(df[col], errors='coerce')
+        series = series.replace([np.inf, -np.inf], np.nan)
+        if series.isna().any():
+            valid_values = series.dropna()
+            fill_value = float(valid_values.median()) if not valid_values.empty else 0.0
+            series = series.fillna(fill_value)
+        df[col] = series.astype(np.float32)
+
+    return df
+
+
+def _load_graphland_local_graph(dataset_dir):
+    # Parse one locally extracted GraphLand dataset directory.
+    info_path = os.path.join(dataset_dir, "info.yaml")
+    features_path = os.path.join(dataset_dir, "features.csv")
+    targets_path = os.path.join(dataset_dir, "targets.csv")
+    split_path = os.path.join(dataset_dir, "split_masks_TH.csv")
+    edge_path = os.path.join(dataset_dir, "edgelist.csv")
+
+    required_paths = [info_path, features_path, targets_path, split_path, edge_path]
+    missing_paths = [path for path in required_paths if not os.path.exists(path)]
+    if missing_paths:
+        raise FileNotFoundError(
+            "The local GraphLand dataset directory is incomplete: {}".format(", ".join(missing_paths))
+        )
+
+    info = _parse_simple_yaml(info_path)
+
+    features_df = pd.read_csv(features_path, index_col=0)
+    features_df = _impute_graphland_features(features_df, info)
+    targets_df = pd.read_csv(targets_path, index_col=0)
+    targets = targets_df[info['target_name']].to_numpy()
+
+    masks_df = pd.read_csv(split_path, index_col=0)
+    masks = {k: np.array(v, dtype=bool) for k, v in masks_df.to_dict('list').items()}
+
+    edges_df = pd.read_csv(edge_path)
+    edge_index = edges_df.to_numpy(dtype=np.int64).T
+
+    feat = features_df.to_numpy(dtype=np.float32, copy=True)
+    feat[np.isinf(feat)] = 0.0
+
+    graph = {
+        "node_feat": feat,
+        "edge_index": edge_index,
+        "num_nodes": feat.shape[0],
+        "masks": masks,
+        "info": info,
+    }
+    return graph, targets.reshape(-1)
+
+
 def prepare_arxiv_graph_data(force_reload=False):
     # Convert arxiv to the local HCGC feat/label/adj cache format.
     dataset_name, dataset_dir, feat_path, label_path, adj_path = _get_dataset_file_paths('arxiv')
@@ -290,11 +398,59 @@ def prepare_arxiv_graph_data(force_reload=False):
     return feat_path, label_path, adj_path
 
 
+def prepare_pokec_graph_data(force_reload=False):
+    # Convert a local GraphLand Pokec directory to the HCGC feat/label/adj cache format.
+    dataset_name, dataset_dir, feat_path, label_path, adj_path = _get_dataset_file_paths('pokec')
+    files_ready = all(os.path.exists(path) for path in [feat_path, label_path, adj_path])
+    if files_ready and not force_reload:
+        feat = np.load(feat_path, allow_pickle=True)
+        if not _has_invalid_values(feat):
+            return feat_path, label_path, adj_path
+        force_reload = True
+        reset_dataset_cache('pokec')
+
+    graph, labels = _load_graphland_local_graph(dataset_dir)
+    feat = graph["node_feat"].astype(np.float32)
+    label = labels.astype(np.float32)
+
+    labeled_mask = ~np.isnan(label)
+    if labeled_mask.any():
+        valid_labels = label[labeled_mask].astype(np.int64)
+        unique_labels = np.unique(valid_labels)
+        label_mapping = {label_value: idx for idx, label_value in enumerate(unique_labels)}
+        mapped = np.full(label.shape[0], -1, dtype=np.int64)
+        mapped[labeled_mask] = np.array([label_mapping[v] for v in valid_labels], dtype=np.int64)
+        label = mapped
+    else:
+        label = np.full(label.shape[0], -1, dtype=np.int64)
+
+    edge_index = graph["edge_index"]
+    row = edge_index[0]
+    col = edge_index[1]
+    sym_row = np.concatenate([row, col], axis=0)
+    sym_col = np.concatenate([col, row], axis=0)
+    sym_values = np.ones(sym_row.shape[0], dtype=np.float32)
+    adj = sp.coo_matrix(
+        (sym_values, (sym_row, sym_col)),
+        shape=(graph["num_nodes"], graph["num_nodes"]),
+    ).tocsr()
+    adj.sum_duplicates()
+    adj.data[:] = 1.0
+
+    np.save(feat_path, feat, allow_pickle=True)
+    np.save(label_path, label, allow_pickle=True)
+    _save_sparse_matrix_as_npy(adj_path, adj)
+    reset_dataset_smoothed_cache('pokec')
+    return feat_path, label_path, adj_path
+
+
 def load_graph_data(dataset_name, show_details=False):
     # Load one dataset from the local cache, preparing arxiv on demand.
     dataset_name, _, feat_path, label_path, adj_path = _get_dataset_file_paths(dataset_name)
     if dataset_name == 'arxiv':
         prepare_arxiv_graph_data()
+    elif dataset_name == 'pokec':
+        prepare_pokec_graph_data()
 
     feat = np.load(feat_path, allow_pickle=True)
     label = np.load(label_path, allow_pickle=True)
@@ -318,6 +474,24 @@ def load_graph_data(dataset_name, show_details=False):
             print(len(label[np.where(label == i)]))
         print("++++++++++++++++++++++++++++++")
     return feat, label, adj, node_num
+
+
+def reset_dataset_cache(dataset_name):
+    # Remove cached feat/label/adj files so the dataset can be rebuilt.
+    _, dataset_dir, feat_path, label_path, adj_path = _get_dataset_file_paths(dataset_name)
+    for path in [feat_path, label_path, adj_path]:
+        if os.path.exists(path):
+            os.remove(path)
+    reset_dataset_smoothed_cache(dataset_name)
+
+
+def reset_dataset_smoothed_cache(dataset_name):
+    # Remove cached smoothed features so they can be regenerated from fresh inputs.
+    _, dataset_dir, _, _, _ = _get_dataset_file_paths(dataset_name)
+    sm_pattern = os.path.join(dataset_dir, f"{dataset_name}_feat_sm_*.npy")
+    import glob
+    for path in glob.glob(sm_pattern):
+        os.remove(path)
 
 
 def setup_seed(seed):
@@ -391,11 +565,14 @@ def batch_inference_embeddings(model, features, batch_size=8192, device='cuda'):
 def smooth_features_sparse(features, adj_ops, cache_path=None):
     # Cache sparse-smoothed features for the large-graph branch.
     if cache_path is not None and os.path.exists(cache_path):
-        return np.load(cache_path, allow_pickle=True)
+        cached = np.load(cache_path, allow_pickle=True)
+        if not _has_invalid_values(cached):
+            return cached
     smoothed = np.asarray(features, dtype=np.float32)
     for op in adj_ops:
         smoothed = op.dot(smoothed)
     smoothed = np.asarray(smoothed, dtype=np.float32)
+    smoothed[np.isinf(smoothed)] = np.nan
     if cache_path is not None:
         np.save(cache_path, smoothed, allow_pickle=True)
     return smoothed

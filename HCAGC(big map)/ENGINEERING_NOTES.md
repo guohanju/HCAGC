@@ -17,7 +17,6 @@
 - The arxiv loader uses OGB's generic `NodePropPredDataset` path, so it does not depend on `torch_geometric`.
 - If `dataset/arxiv.zip` exists, arxiv is prepared directly from that local zip file and no online download is needed.
 - `load_graph_data("arxiv")` prepares the local files automatically on first use.
-- `load_arxiv_splits()` reads the original OGB time split files from the local arxiv package.
 - `sparse_preprocess_graph()` and `smooth_features_sparse()` avoid dense full-graph preprocessing for arxiv.
 - `batch_contrastive_loss()` and `batch_inference_embeddings()` are added for large-graph arxiv training/inference.
 - Large-graph Hamiltonian regularization now uses block-wise computation on each batch instead of random pair sampling.

@@ -11,16 +11,16 @@ import torch.nn.functional as F
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--gnnlayers', type=int, default=3, help="Number of gnn layers")
-parser.add_argument('--epochs', type=int, default=400, help='Number of epochs to train.')
+parser.add_argument('--epochs', type=int, default=200, help='Number of epochs to train.')
 parser.add_argument('--dims', type=int, default=[500], help='Number of units in hidden layer 1.')
 parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate.')
-parser.add_argument('--dataset', type=str, default='cora', help='type of dataset.')
+parser.add_argument('--dataset', type=str, default='pokec', help='type of dataset.')
 parser.add_argument('--cluster_num', type=int, default=7, help='type of dataset.')
 parser.add_argument('--device', type=str, default='cuda:0', help='device')
 parser.add_argument('--k', type=int, default=3, help='KNN')
 parser.add_argument('--batch_size', type=int, default=4096, help='mini-batch size for large graphs')
 parser.add_argument('--eval_batch_size', type=int, default=8192, help='inference batch size for large graphs')
-parser.add_argument('--lambda_h', type=float, default=100, help='weight of sampled hamiltonian loss for large graphs')
+parser.add_argument('--lambda_h', type=float, default=1000, help='weight of sampled hamiltonian loss for large graphs')
 parser.add_argument('--hamiltonian_gamma', type=float, default=1.0, help='gamma in sampled hamiltonian loss')
 parser.add_argument('--hamiltonian_chunk_size', type=int, default=1024, help='chunk size for block hamiltonian loss on large graphs')
 
@@ -187,11 +187,16 @@ for args.dataset in [args.dataset]:
         args.gnnlayers = 6
         args.lr = 1e-3
         args.dims = [500]
+    elif args.dataset == 'pokec':
+        args.cluster_num = 183
+        args.gnnlayers = 6
+        args.lr = 1e-3
+        args.dims = [500]
 
     # load data
     lambda_f = 0.8
     X, y, A, node_num = load_graph_data(args.dataset, show_details=True)
-    if args.dataset == 'arxiv':
+    if args.dataset in ['arxiv', 'pokec']:
         if rank == 0:
             print("Using large-graph training branch for {}...".format(args.dataset))
         features = X
@@ -369,7 +374,7 @@ for args.dataset in [args.dataset]:
         nmi_list = []
         ari_list = []
         f1_list = []
-        for seed in range(10):
+        for seed in range(5):
             setup_seed(seed)
             initial_acc, initial_nmi, initial_ari, initial_f1, prediect_labels = clustering(sm_fea_s, true_labels, args.cluster_num)
             print('Initial Acc: {:.4f}, Initial NMI: {:.4f}, Initial ARI: {:.4f}, Initial F1: {:.4f}'.format(initial_acc, initial_nmi, initial_ari, initial_f1))
