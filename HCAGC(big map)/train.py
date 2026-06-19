@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--gnnlayers', type=int, default=3, help="Number of gnn layers")
-parser.add_argument('--epochs', type=int, default=200, help='Number of epochs to train.')
+parser.add_argument('--epochs', type=int, default=400, help='Number of epochs to train.')
 parser.add_argument('--dims', type=int, default=[500], help='Number of units in hidden layer 1.')
 parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate.')
 parser.add_argument('--dataset', type=str, default='pokec', help='type of dataset.')
